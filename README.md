@@ -4,3 +4,6 @@ This is a really demanding project done in cooperation with Arash Asheafnejad.Th
 
 ## Files Provided
 *Schematics
+*Source Code
+*Project presentation powerpoint file
+*Proposal of the project.
