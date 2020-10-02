@@ -1,0 +1,1317 @@
+main                                                                                                                    PAGE 1
+                         1     ORG 0000H
+0000 020016              2     LJMP MAIN
+                         3
+                         4     ORG 0003H
+0003 020055              5     LJMP EX0_ISR
+                         6
+                         7     ;ORG 000BH
+                         8     ;LJMP T0_ISR
+                         9
+                        10     ORG 0013H
+0013 02005C             11     LJMP EX1_ISR
+                        12     ;***************************************
+                        13     ;               Ports
+                        14     ;***************************************
+  0080                  15     sda equ P0.0 ; serial data line
+  0081                  16     scl equ P0.1 ;serial clock line
+                        17
+  0093                  18     CLK BIT P1.3
+  0094                  19     CS BIT P1.4
+  0095                  20     DIN BIT P1.5
+                        21
+  00A0                  22     DEBUG BIT P2.0
+                        23
+                        24     ;***************************************
+                        25     ;               Variables
+                        26     ;***************************************
+  0030                  27     SPEED EQU 30h
+  0031                  28     BRIGHT EQU 31h
+                        29
+  0032                  30     WADDR EQU 32h
+  0033                  31     WDATA EQU 33h
+                        32
+  004E                  33     MAX EQU 4EH
+  004F                  34     MIN EQU 4FH
+  0050                  35     SAMPLE EQU 50H
+  0051                  36     PREV_SAMPLE EQU 51H
+  0052                  37     DELTA EQU 52H
+  0053                  38     FLOOR  EQU 53H
+                        39
+  0054                  40     THRESHOLD_5 EQU 54H
+  0055                  41     THRESHOLD_4 EQU 55H
+  0056                  42     THRESHOLD_3 EQU 56H
+  0057                  43     THRESHOLD_2 EQU 57H
+  0058                  44     THRESHOLD_1 EQU 58H
+                        45
+  005A                  46     TEMP EQU 5AH
+                        47
+  0060                  48     P_1 EQU 60H
+  0061                  49     P_2 EQU 61H
+  0062                  50     P_3 EQU 62H
+                        51
+  0063                  52     RTC_SEC EQU 63H
+  0064                  53     RTC_MIN EQU 64H
+  0065                  54     RTC_HOUR EQU 65H
+  0066                  55     RTC_DATE EQU 66H
+  0067                  56     RTC_MON EQU 67H
+  0068                  57     RTC_YEAR EQU 68H
+                        58
+  0069                  59     LOCATION EQU 69H
+  006A                  60     INDEX_IN_CHAR EQU 6Ah
+                        61
+                        62
+                        63     ;EX: 17-07-30 15:51:27 145 5
+                        64
+  007C                  65     ELAPSED10SEC BIT 7CH
+  007D                  66     RUNNING BIT 7DH
+  007E                  67     STILL_SENDING BIT 7EH
+  007F                  68     DATA_IS_SENT_ONCE BIT 7FH
+                        69     ;***************************************
+                        70
+                        71
+                        72     MAIN:
+0016 758920             73     MOV TMOD,#20H ;mode 2 timer 0
+0019 D28A               74     SETB TCON.2 ;make INT1 edge-triggered interrupt
+001B D288               75     SETB TCON.0 ;make INT0 edge-triggered interrupt
+                        76     ;SETB IP.2
+                        77     ;SETB IP.0
+001D 75A885             78     MOV IE,#10000101B ;enable External INT 0 AND 1
+0020 758DE8             79     MOV TH1,#0E8H ; Baud rate = 1200bps
+0023 759850             80     MOV SCON,#50H
+0026 D28E               81     SETB TR1 ;start the timer
+0028 1174               82     ACALL CONFIGURE
+                        83
+002A 754F6B             84     MOV MIN, #107
+002D 754E35             85     MOV MAX, #53
+0030 51D3               86     ACALL CALCULATE_THRESHOLDS
+                        87
+0032 B2A0               88     CPL DEBUG
+0034 1166               89     ACALL DELAY1SEC
+0036 B2A0               90     CPL DEBUG
+0038 1166               91     ACALL DELAY1SEC
+003A B2A0               92     CPL DEBUG
+003C 1166               93     ACALL DELAY1SEC
+                        94
+                        95     RESTART_PROGRAM:
+                        96
+003E 7DC8               97     MOV R5, #200
+                        98     READ_AGAIN:
+0040 12008D             99     LCALL READ_PRESSURE
+0043 12026D            100     LCALL CHECK_FLOORS
+0046 120386            101     LCALL SHOW_FLOOR
+0049 DDF5              102     DJNZ R5, READ_AGAIN
+                       103
+                       104     ;LCALL CHECK_RUNNING
+                       105     ; IF ELEVATOR IS STOPPED
+                       106     ;JB RUNNING, SKIP_SEND
+                       107             ;MOV A, FLOOR
+                       108
+                       109     ;       ; IF AT 5TH FLOOR
+                       110     ;       CJNE A, #5, SKIP_UPDATE1
+                       111     ;       MOV MIN, P_2
+                       112     ;       SKIP_UPDATE1:
+                       113     ;
+                       114     ;       ; IF AT GROUND FLOOR
+                       115     ;       CJNE A, #0, SKIP_UPDATE2
+                       116     ;       MOV MAX, SAMPLE
+                       117     ;       LCALL CALCULATE_THRESHOLDS
+                       118     ;       SKIP_UPDATE2:
+                       119
+                       120             ; IF 10SEC ELAPSED FROM PREV TRANSMISSION
+                       121             ;JNB ELAPSED10SEC, SKIP_SEND
+004B 1200DE            122                     LCALL READ_RTC
+004E 1201AF            123                     LCALL SEND_DATA
+0051 1166              124                     ACALL DELAY1SEC
+                       125                     ;CLR ELAPSED10SEC
+                       126                     ;SETB TF0
+                       127     SKIP_SEND:
+                       128
+0053 80E9              129     SJMP RESTART_PROGRAM
+                       130
+                       131
+                       132
+                       133
+                       134
+                       135
+                       136
+                       137
+                       138
+                       139     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       140     EX0_ISR:
+0055 85504E            141             MOV MAX, SAMPLE
+0058 1202D3            142             LCALL CALCULATE_THRESHOLDS
+                       143             ;MOV FLOOR, #0
+005B 32                144     RETI
+                       145
+                       146     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       147
+                       148     ;       JB ELAPSED10SEC ,SKIP_10
+                       149     ;       CLR TR0
+                       150     ;       MOV TH0,#HIGH 0 ;0.06 sec
+                       151     ;       MOV TL0,#LOW 0
+                       152     ;       SETB TR0
+                       153     ;       INC r6
+                       154     ;       CJNE r6,#165,SKIP_10
+                       155     ;       setb ELAPSED10SEC
+                       156     ;       MOV r6,#0 ;restart
+                       157     ;       SKIP_10:
+                       158     ;RETI
+                       159
+                       160
+                       161     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       162     EX1_ISR:
+005C 85614F            163             MOV MIN, P_2
+005F 755000            164             MOV SAMPLE, #0
+0062 755100            165             MOV PREV_SAMPLE, #0
+                       166             ;MOV FLOOR, #5
+0065 32                167     RETI
+                       168
+                       169
+                       170
+                       171     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       172     DELAY1SEC:
+0066 7B05              173             MOV R3,#5
+0068 7AFA              174             BACK_3:MOV R2,#250
+006A 79FA              175             BACK_2:MOV R1,#250
+006C 00                176             BACK_1:NOP
+006D D9FD              177             DJNZ R1,BACK_1
+006F DAF9              178             DJNZ R2,BACK_2
+0071 DBF5              179             DJNZ R3,BACK_3
+0073 22                180     RET
+                       181
+                       182
+                       183     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       184     CONFIGURE:
+                       185             ;RESET COMMAND FOR PRESSURE SENSOR
+0074 120330            186             lcall i2cinit
+0077 12033E            187             lcall startc
+007A 74EE              188             mov a,#11101110b
+007C 714E              189             acall send
+007E 741E              190             mov a,#1EH
+0080 714E              191             acall send
+0082 7145              192             acall stop
+                       193
+0084 C27C              194             CLR ELAPSED10SEC
+0086 D28D              195             SETB TF0
+0088 C27F              196             CLR DATA_IS_SENT_ONCE
+                       197
+008A C27D              198             CLR RUNNING
+                       199
+                       200     ;       MOV BRIGHT, #01H
+                       201     ;       MOV INDEX_IN_CHAR, #1
+                       202     ;       MOV LOCATION, #0
+                       203
+                       204             ;ACALL CONFIGURE_DISPLAY
+008C 22                205     RET
+                       206
+                       207     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       208     READ_PRESSURE:
+                       209
+                       210             ; ADC conversion comand D1(for pressure measurement)
+008D 120330            211             lcall i2cinit
+0090 12033E            212             lcall startc
+0093 74EE              213             mov a,#11101110b
+0095 714E              214             acall send
+0097 7440              215             mov a,#40H; ;according to the data sheet
+0099 714E              216             acall send
+009B 7145              217             acall stop
+009D 5163              218             ACALL DELLAY10ms
+                       219
+                       220
+                       221             ;SEND  the ADC READ COMMAND
+009F 120330            222             lcall i2cinit
+00A2 12033E            223             lcall startc
+00A5 74EE              224             mov a,#11101110b
+00A7 714E              225             acall send
+00A9 7400              226             mov a,#00H; ;according to the data sheet
+00AB 714E              227             acall send
+00AD 7145              228             acall stop
+                       229
+                       230
+                       231             ; READING PART
+00AF 120330            232             lcall i2cinit
+00B2 12033E            233             lcall startc
+00B5 74EF              234             mov a,#11101111b
+00B7 714E              235             acall send
+                       236             ; Read the first byte
+00B9 7176              237             acall recv
+00BB 7164              238             acall ACK
+00BD F560              239             MOV P_1,A
+                       240             ; Read the  second byte
+00BF 7176              241             acall recv
+00C1 7164              242             acall ACK
+00C3 F561              243             MOV P_2,A
+                       244             ; Read the third byte byte
+00C5 7176              245             acall recv
+00C7 716D              246             acall nak
+00C9 7145              247             acall stop
+00CB F562              248             MOV P_3,A
+                       249
+                       250
+00CD E561              251             MOV A, P_2
+                       252
+                       253             ; CHECKS IF A IS SMALLER THAN MIN
+00CF C3                254             CLR C
+00D0 B54F00            255             CJNE A, MIN, $+3
+00D3 4008              256             JC SKIP_VALUE
+00D5 855051            257             MOV PREV_SAMPLE, SAMPLE
+                       258
+00D8 C3                259             CLR C
+00D9 954F              260             SUBB A, MIN
+00DB F550              261             MOV SAMPLE, A
+                       262             SKIP_VALUE:
+                       263
+                       264
+00DD 22                265     RET
+                       266
+                       267
+                       268
+                       269
+                       270     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       271     READ_RTC:
+                       272     ;READING SECONDS
+00DE 120330            273             lcall i2cinit
+00E1 12033E            274             lcall startc
+00E4 74D0              275             mov a,#11010000b
+00E6 714E              276             acall send
+00E8 7400              277             mov a,#00H; ;according to the data sheet
+00EA 714E              278             acall send
+00EC 7145              279             acall stop
+                       280     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+00EE 120330            281             lcall i2cinit
+00F1 12033E            282             lcall startc
+00F4 74D1              283             mov a,#11010001b   ;
+00F6 714E              284             acall send
+00F8 7176              285             acall recv
+00FA 716D              286             acall nak
+00FC 7145              287             acall stop
+00FE F563              288             MOV RTC_SEC,A
+                       289     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                       290     ;READING MINUTES
+0100 120330            291             lcall i2cinit
+0103 12033E            292             lcall startc
+0106 74D0              293             mov a,#11010000b
+0108 714E              294             acall send
+010A 7401              295             mov a,#01H; ;according to the data sheet
+010C 714E              296             acall send
+010E 7145              297             acall stop
+                       298     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+0110 120330            299             lcall i2cinit
+0113 12033E            300             lcall startc
+0116 74D1              301             mov a,#11010001b
+0118 714E              302             acall send
+011A 7176              303             acall recv
+011C 716D              304             acall nak
+011E 7145              305             acall stop
+0120 F564              306             MOV RTC_MIN,A
+                       307     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                       308     ;READING HOURS
+0122 120330            309             lcall i2cinit
+0125 12033E            310             lcall startc
+0128 74D0              311             mov a,#11010000b
+012A 714E              312             acall send
+012C 7402              313             mov a,#02H; ;according to the data sheet
+012E 714E              314             acall send
+0130 7145              315             acall stop
+                       316     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+0132 120330            317             lcall i2cinit
+0135 12033E            318             lcall startc
+0138 74D1              319             mov a,#11010001b
+013A 714E              320             acall send
+013C 7176              321             acall recv
+013E 716D              322             acall nak
+0140 543F              323             ANL A, #00111111B
+0142 7145              324             acall stop
+0144 F565              325             MOV RTC_HOUR,A
+                       326     ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                       327             ;READING DATE
+0146 120330            328             lcall i2cinit
+0149 12033E            329             lcall startc
+014C 74D0              330             mov a,#11010000b
+014E 714E              331             acall send
+0150 7404              332             mov a,#04H; ;according to the data sheet
+0152 714E              333             acall send
+0154 7145              334             acall stop
+                       335     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+0156 120330            336             lcall i2cinit
+0159 12033E            337             lcall startc
+015C 74D1              338             mov a,#11010001b
+015E 714E              339             acall send
+0160 7176              340             acall recv
+0162 716D              341             acall nak
+0164 7145              342             acall stop
+0166 F566              343             MOV RTC_DATE,A
+                       344     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                       345             ;READING MONTH
+0168 120330            346             lcall i2cinit
+016B 12033E            347             lcall startc
+016E 74D0              348             mov a,#11010000b
+0170 714E              349             acall send
+0172 7405              350             mov a,#05H; ;according to the data sheet
+0174 714E              351             acall send
+0176 7145              352             acall stop
+                       353     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+0178 120330            354             lcall i2cinit
+017B 12033E            355             lcall startc
+017E 74D1              356             mov a,#11010001b
+0180 714E              357             acall send
+0182 7176              358             acall recv
+0184 716D              359             acall nak
+0186 541F              360             ANL A, #00011111B
+0188 7145              361             acall stop
+018A F567              362             MOV RTC_MON,A
+                       363     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+                       364             ;READING YEAR
+018C 120330            365             lcall i2cinit
+018F 12033E            366             lcall startc
+0192 74D0              367             mov a,#11010000b
+0194 714E              368             acall send
+0196 7406              369             mov a,#06H; ;according to the data sheet
+0198 714E              370             acall send
+019A 7145              371             acall stop
+                       372     ;+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+019C 120330            373             lcall i2cinit
+019F 12033E            374             lcall startc
+01A2 74D1              375             mov a,#11010001b
+01A4 714E              376             acall send
+01A6 7176              377             acall recv
+01A8 716D              378             acall nak
+01AA 7145              379             acall stop
+01AC F568              380             MOV RTC_YEAR,A
+01AE 22                381     RET
+                       382
+                       383
+                       384
+                       385
+                       386     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       387     SEND_DATA:
+01AF E568              388             MOV A,RTC_YEAR
+01B1 5153              389             ACALL CONVERT_TO_ASCII_BCD
+01B3 510E              390             ACALL send_serially_BCD ;year
+                       391
+01B5 5133              392             ACALL sendminus
+                       393
+01B7 E567              394             MOV A,RTC_MON
+01B9 5153              395             ACALL CONVERT_TO_ASCII_BCD
+01BB 510E              396             ACALL send_serially_BCD ;month
+                       397
+01BD 5133              398             ACALL sendminus
+                       399
+01BF E566              400             MOV A,RTC_DATE
+01C1 5153              401             ACALL CONVERT_TO_ASCII_BCD
+01C3 510E              402             ACALL send_serially_BCD ;date
+                       403
+01C5 5129              404             ACALL sendspace
+                       405
+01C7 E565              406             MOV A,RTC_HOUR
+01C9 5153              407             ACALL CONVERT_TO_ASCII_BCD
+01CB 510E              408             ACALL send_serially_BCD ;hour
+                       409
+01CD 511F              410             ACALL send2dots
+                       411
+01CF E564              412             MOV A,RTC_MIN
+01D1 5153              413             ACALL CONVERT_TO_ASCII_BCD
+01D3 510E              414             ACALL send_serially_BCD  ;minutes
+                       415
+01D5 511F              416             ACALL send2dots
+                       417
+01D7 E563              418             MOV A,RTC_SEC
+01D9 5153              419             ACALL CONVERT_TO_ASCII_BCD
+01DB 510E              420             ACALL send_serially_BCD ;seconds
+                       421
+01DD 5129              422             ACALL sendspace
+                       423
+01DF E561              424             MOV A,P_2
+01E1 513D              425             ACALL CONVERT_TO_ASCII
+01E3 31F5              426             ACALL send_serially;seconds
+                       427
+                       428
+01E5 5129              429             ACALL sendspace
+                       430
+                       431
+01E7 C299              432             CLR TI
+01E9 E553              433             MOV A,FLOOR
+01EB 2430              434             ADD A, #30H
+01ED F599              435             MOV SBUF,A
+01EF 3099FD            436             JNB TI,$
+                       437
+01F2 B2A0              438             CPL DEBUG; FOR DEBUGGING
+01F4 22                439     RET
+                       440
+                       441     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       442     SEND_SERIALLY:
+                       443     ; send setially the first byte (in our case digit)
+01F5 C299              444             CLR TI
+01F7 EC                445             MOV A,R4
+01F8 F599              446             MOV SBUF,A
+01FA 3099FD            447             JNB TI,$
+                       448
+                       449     ;send serially the second byte (in our case digit)
+01FD C299              450             CLR TI
+01FF EB                451             MOV A,R3
+0200 F599              452             MOV SBUF,A
+0202 3099FD            453             JNB TI,$
+                       454
+                       455     ;send serially the third byte (in our case digit)
+0205 C299              456             CLR TI
+0207 EA                457             MOV A,R2
+0208 F599              458             MOV SBUF,A
+020A 3099FD            459             JNB TI,$
+020D 22                460     RET
+                       461
+                       462     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       463     send_serially_BCD:
+                       464        ;;send serially the first byte (in our case digit)
+020E C299              465             CLR TI
+0210 EA                466             MOV A,R2
+0211 F599              467             MOV SBUF,A
+0213 3099FD            468             JNB TI,$
+                       469
+                       470     ;   ;;send serially the second byte (in our case digit)
+0216 C299              471             CLR TI
+0218 EB                472             MOV A,R3
+0219 F599              473             MOV SBUF,A
+021B 3099FD            474             JNB TI,$
+021E 22                475     RET
+                       476
+                       477     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       478     send2dots:
+021F C299              479             CLR TI
+0221 743A              480             MOV A,#':'
+0223 F599              481             MOV SBUF,A
+0225 3099FD            482             JNB TI,$
+0228 22                483     RET
+                       484
+                       485     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       486     sendspace:
+0229 C299              487             CLR TI
+022B 7420              488             MOV A,#' '
+022D F599              489             MOV SBUF,A
+022F 3099FD            490             JNB TI,$
+0232 22                491     RET
+                       492     sendminus:
+0233 C299              493             CLR TI
+0235 742D              494             MOV A,#'-'
+0237 F599              495             MOV SBUF,A
+0239 3099FD            496             JNB TI,$
+023C 22                497     RET
+                       498
+                       499
+                       500
+                       501
+                       502     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       503     CONVERT_TO_ASCII:
+                       504             ;first digit
+023D 75F064            505             MOV B,#100
+0240 84                506             DIV AB
+0241 2430              507             ADD A,#30H
+0243 FC                508             MOV r4,A ;done with first digit
+                       509             ;Second digit
+0244 E5F0              510             MOV A,B
+0246 75F00A            511             MOV B,#10
+0249 84                512             DIV AB
+024A 2430              513             ADD A,#30H
+024C FB                514             Mov r3,A
+                       515             ;last digit
+024D E5F0              516             MOV A,B
+024F 2430              517             ADD A,#30H
+0251 FA                518             MOV r2,A
+0252 22                519     RET
+                       520
+                       521     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       522     CONVERT_TO_ASCII_BCD:
+0253 F5F0              523             MOV B,A     ;example 35H (firstly save the value of a)
+0255 540F              524             ANL A,#0FH  ; 05;
+0257 2430              525             ADD A,#30H  ; 35H;
+0259 FB                526             MOV R3,A
+025A E5F0              527             MOV A,B  ;again 35H
+025C C4                528             SWAP A
+025D 540F              529             ANL A,#0FH  ; 05;
+025F 2430              530             ADD A,#30H  ; 35H;    so the asccı values for 35H are saved in  R1='3'  r2='5'
+0261 FA                531             MOV R2,A
+0262 22                532     RET
+                       533
+                       534
+                       535
+                       536     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       537     DELLAY10MS:
+0263 7B32              538             MOV R3,#50
+0265 7A40              539             BACK__3:MOV R2,#64
+0267 00                540             BACK__2:NOP
+0268 DAFD              541             DJNZ R2,BACK__2
+026A DBF9              542             DJNZ R3,BACK__3
+026C 22                543     RET
+                       544
+                       545     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       546     CHECK_FLOORS:
+026D E550              547             MOV A, SAMPLE
+026F C3                548             CLR C
+0270 B55400            549             CJNE A,THRESHOLD_5,$+3
+0273 5005              550             JNC  FOUR
+0275 755305            551             mov floor,#5 ;at the fifth floor
+0278 8030              552             SJMP EXIT_CHECK
+027A C3                553             FOUR: CLR C
+027B B55500            554             CJNE A,THRESHOLD_4,$+3
+027E 5005              555             JNC THREE
+0280 755304            556             MOV floor,#4 ;at the fourth floor
+0283 8025              557             SJMP EXIT_CHECK
+                       558
+0285 C3                559             THREE:CLR C
+0286 B55600            560             CJNE A,THRESHOLD_3,$+3
+0289 5005              561             JNC TWO
+028B 755303            562             MOV floor,#3 ;at the third floor
+028E 801A              563             SJMP EXIT_CHECK
+                       564
+0290 C3                565             TWO:CLR C
+0291 B55700            566             CJNE A,THRESHOLD_2,$+3
+0294 5005              567             JNC ONE
+0296 755302            568             MOV floor,#2 ;at the second floor
+0299 800F              569             SJMP EXIT_CHECK
+                       570
+029B C3                571             ONE:CLR C
+029C B55800            572             CJNE A,THRESHOLD_1,$+3
+029F 5005              573             JNC ZERO
+02A1 755301            574             MOV floor,#1 ;at the first floor
+02A4 8004              575             SJMP EXIT_CHECK
+                       576
+02A6 C3                577             ZERO: CLR C
+02A7 755300            578             MOV floor,#0 ;at the ground floor
+                       579
+                       580             EXIT_CHECK:
+02AA 22                581     RET
+                       582
+                       583     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       584     CHECK_RUNNING:
+02AB E550              585             MOV A, SAMPLE
+02AD 8551F0            586             MOV B, PREV_SAMPLE
+                       587
+02B0 C3                588             CLR C
+02B1 B5F000            589             CJNE A,B,$+3
+02B4 4007              590             JC A_SMALLER
+02B6 C3                591             CLR C
+02B7 95F0              592             SUBB A,B
+02B9 F552              593             mov delta,A
+02BB 8007              594             SJMP exit_check2
+                       595
+                       596             A_SMALLER:
+02BD C5F0              597             XCH A, B
+02BF C3                598             CLR C
+02C0 95F0              599             SUBB A,B
+02C2 F552              600             MOV delta,A
+                       601
+                       602             exit_check2:
+02C4 C3                603             CLR C
+02C5 B40300            604             CJNE A,#3,$+3
+02C8 5004              605             JNC MOVING
+02CA C27D              606             CLR RUNNING
+02CC 8004              607             SJMP EXIT_CHECK3
+02CE D27D              608             MOVING: SETB RUNNING
+02D0 C27F              609             CLR DATA_IS_SENT_ONCE
+                       610             EXIT_CHECK3:
+02D2 22                611     RET
+                       612
+                       613
+                       614
+                       615
+                       616     ;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       617     CALCULATE_THRESHOLDS:
+02D3 E54E              618             MOV A, MAX
+                       619             ;threshold for floor 5
+02D5 75F00A            620             MOV B,#10
+02D8 84                621             DIV AB
+02D9 F554              622             MOV THRESHOLD_5,A
+                       623
+                       624             ;threshold for floor 4
+02DB E54E              625             MOV A,MAX
+02DD 75F00A            626             MOV B,#10
+02E0 84                627             DIV AB
+02E1 F55A              628             MOV TEMP,A
+02E3 E54E              629             MOV A,MAX
+02E5 75F005            630             MOV B,#5
+02E8 84                631             DIV AB
+02E9 255A              632             ADD A,TEMP
+02EB F555              633             MOV THRESHOLD_4,A
+                       634             ;threshold for floor 3
+02ED E54E              635             MOV A,MAX
+02EF 75F00A            636             MOV B,#10
+02F2 84                637             DIV AB
+02F3 F55A              638             MOV TEMP,A
+02F5 E54E              639             MOV A,MAX
+02F7 75F005            640             MOV B,#5
+02FA 84                641             DIV AB
+02FB 75F002            642             MOV B,#2
+02FE A4                643             MUL AB
+02FF 255A              644             ADD A,TEMP
+0301 F556              645             MOV threshold_3,A
+                       646             ;threshold for floor 2
+0303 E54E              647             MOV A,MAX
+0305 75F00A            648             MOV B,#10
+0308 84                649             DIV AB
+0309 F55A              650             MOV TEMP,A
+                       651
+030B E54E              652             MOV A,MAX
+030D 75F005            653             MOV B,#5
+0310 84                654             DIV AB
+0311 75F003            655             MOV B,#3
+0314 A4                656             MUL AB
+0315 255A              657             ADD A,TEMP
+0317 F557              658             MOV threshold_2,A
+                       659             ;threshold for floor 1
+0319 E54E              660             MOV A,MAX
+031B 75F00A            661             MOV B,#10
+031E 84                662             DIV AB
+031F F55A              663             MOV TEMP,A
+                       664
+0321 E54E              665             MOV A,MAX
+0323 75F005            666             MOV B,#5
+0326 84                667             DIV AB
+0327 75F004            668             MOV B,#4
+032A A4                669             MUL AB
+032B 255A              670             ADD A,TEMP
+032D F558              671             MOV THRESHOLD_1,A
+032F 22                672     RET
+                       673
+                       674
+                       675
+                       676     ;***************************************
+                       677     ;Initializing I2C Bus Communication
+                       678     ;***************************************
+                       679     i2cinit:
+0330 D280              680             setb sda
+0332 D281              681             setb scl
+0334 22                682     RET
+                       683
+                       684     ;****************************************
+                       685     ;ReStart Condition for I2C Communication
+                       686     ;****************************************
+                       687     rstart:
+0335 C281              688             clr scl
+0337 D280              689             setb sda
+0339 D281              690             setb scl
+033B C280              691             clr sda
+033D 22                692     RET
+                       693
+                       694     ;****************************************
+                       695     ;Start Condition for I2C Communication
+                       696     ;****************************************
+                       697     startc:
+033E D281              698             setb scl
+0340 C280              699             clr sda
+0342 C281              700             clr scl
+0344 22                701     RET
+                       702
+                       703     ;*****************************************
+                       704     ;Stop Condition For I2C Bus
+                       705     ;*****************************************
+                       706     stop:
+0345 C281              707             clr scl
+0347 C280              708             clr sda
+0349 D281              709             setb scl
+034B D280              710             setb sda
+034D 22                711     RET
+                       712
+                       713     ;*****************************************
+                       714     ;Sending Data to slave on I2C bus
+                       715     ;*****************************************
+                       716     send:
+034E 7F08              717             mov r7,#08
+                       718     back:
+0350 C281              719             clr scl
+0352 33                720             rlc a
+0353 9280              721             mov sda,c
+0355 D281              722             setb scl
+0357 DFF7              723             djnz r7,back
+0359 C281              724             clr scl
+035B D280              725             setb sda
+035D D281              726             setb scl
+035F A280              727             mov c, sda
+0361 C281              728             clr scl
+0363 22                729     RET
+                       730
+                       731     ;*****************************************
+                       732     ;ACK and NAK for I2C Bus
+                       733     ;*****************************************
+                       734     ack:
+0364 C280              735             clr sda
+0366 D281              736             setb scl
+0368 C281              737             clr scl
+036A D280              738             setb sda
+036C 22                739     RET
+                       740
+                       741     nak:
+036D D280              742             setb sda
+036F D281              743             setb scl
+0371 C281              744             clr scl
+0373 D281              745             setb scl
+0375 22                746     RET
+                       747
+                       748     ;*****************************************
+                       749     ;Receiving Data from slave on I2C bus
+                       750     ;*****************************************
+                       751     recv:
+0376 7F08              752             mov r7,#08
+                       753     back2:
+0378 C281              754             clr scl
+037A D281              755             setb scl
+037C A280              756             mov c,sda
+037E 33                757             rlc a
+037F DFF7              758             djnz r7,back2
+0381 C281              759             clr scl
+0383 D280              760             setb sda
+0385 22                761     RET
+                       762
+                       763     SHOW_FLOOR:
+0386 900390            764             MOV DPTR, #SEVEN_SEGMENTS
+0389 E553              765             MOV A, FLOOR
+038B 93                766             MOVC A, @A+DPTR
+038C F4                767             CPL A
+038D F5A0              768             MOV P2, A
+038F 22                769     RET
+                       770
+                       771
+                       772
+                       773     SEVEN_SEGMENTS:
+                       774     ;GFEDCBA0
+0390 7E                775     DB 01111110B ;0
+0391 60                776     DB 01100000B ;1
+0392 B6                777     DB 10110110B ;2
+0393 9E                778     DB 10011110B ;3
+0394 CC                779     DB 11001100B ;4
+0395 DA                780     DB 11011010B ;5
+                       781
+                       782
+                       783     ;;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       784     ;CONFIGURE_DISPLAY:
+                       785     ;       MOV WADDR, #00h
+                       786     ;       MOV WDATA, #00h  ;nop
+                       787     ;
+                       788     ;       MOV R2,#8
+                       789     ;       QWERTY:
+                       790     ;       ACALL SEND_DISPLAY
+                       791     ;
+                       792     ;       DJNZ R2, QWERTY
+                       793     ;
+                       794     ;       SETB CS
+                       795     ;       CLR CS
+                       796     ;
+                       797     ;
+                       798     ;       MOV WADDR, #09h
+                       799     ;       MOV WDATA, #00h  ;decoding BCD
+                       800     ;       ;CLR CS
+                       801     ;       ACALL SEND_DISPLAY
+                       802     ;       SETB CS
+                       803     ;       nop
+                       804     ;       CLR CS
+                       805     ;
+                       806     ;       MOV A, BRIGHT
+                       807     ;
+                       808     ;       MOV WADDR, #0Ah
+                       809     ;       MOV WDATA, A  ;brightness
+                       810     ;       ;CLR CS
+                       811     ;       ACALL SEND_DISPLAY
+                       812     ;       SETB CS
+                       813     ;       nop
+                       814     ;       CLR CS
+                       815     ;
+                       816     ;       MOV WADDR, #0bh
+                       817     ;       MOV WDATA, #07h  ;scanlimitï¼8 LEDs
+                       818     ;       ;CLR CS
+                       819     ;       ACALL SEND_DISPLAY
+                       820     ;       SETB CS
+                       821     ;       nop
+                       822     ;       CLR CS
+                       823     ;
+                       824     ;       MOV WADDR, #0ch
+                       825     ;       MOV WDATA, #01h  ;power-down modeï¼0ï¼normal modeï¼1
+                       826     ;       ;CLR CS
+                       827     ;       ACALL SEND_DISPLAY
+                       828     ;       SETB CS
+                       829     ;       nop
+                       830     ;       CLR CS
+                       831     ;
+                       832     ;       MOV WADDR, #0fh
+                       833     ;       MOV WDATA, #00h  ;test display
+                       834     ;       ;CLR CS
+                       835     ;       ACALL SEND_DISPLAY
+                       836     ;       SETB CS
+                       837     ;       nop
+                       838     ;       CLR CS
+                       839     ;
+                       840     ;
+                       841     ;       MOV WADDR, #00h
+                       842     ;       MOV WDATA, #00h  ;nop
+                       843     ;       ACALL SEND_DISPLAY
+                       844     ;       SETB CS
+                       845     ;       nop
+                       846     ;       CLR CS
+                       847     ;
+                       848     ;       ACALL SEND_DISPLAY
+                       849     ;       SETB CS
+                       850     ;       nop
+                       851     ;       CLR CS
+                       852     ;
+                       853     ;       ACALL SEND_DISPLAY
+                       854     ;       SETB CS
+                       855     ;       nop
+                       856     ;       CLR CS
+                       857     ;
+                       858     ;       ACALL SEND_DISPLAY
+                       859     ;       SETB CS
+                       860     ;       nop
+                       861     ;       CLR CS
+                       862     ;
+                       863     ;       ACALL SEND_DISPLAY
+                       864     ;       SETB CS
+                       865     ;       nop
+                       866     ;       CLR CS
+                       867     ;
+                       868     ;       ACALL SEND_DISPLAY
+                       869     ;       SETB CS
+                       870     ;       nop
+                       871     ;       CLR CS
+                       872     ;
+                       873     ;       ACALL SEND_DISPLAY
+                       874     ;       SETB CS
+                       875     ;       nop
+                       876     ;       CLR CS
+                       877     ;RET
+                       878
+                       879     ;;%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+                       880     ;SEND_DISPLAY:
+                       881     ;       ;CLR CS
+                       882     ;       MOV A, WADDR
+                       883     ;
+                       884     ;       MOV R4, #8
+                       885     ;       FIRST:
+                       886     ;       RLC A
+                       887     ;       MOV DIN, C
+                       888     ;       SETB CLK
+                       889     ;       CLR CLK
+                       890     ;       DJNZ r4, FIRST
+                       891     ;
+                       892     ;       MOV A, WDATA
+                       893     ;
+                       894     ;       MOV R4, #8
+                       895     ;       SECOND:
+                       896     ;       RLC A
+                       897     ;       MOV DIN, C
+                       898     ;       SETB CLK
+                       899     ;       CLR CLK
+                       900     ;       DJNZ r4, SECOND
+                       901     ;RET
+                       902     ;
+                       903     ;DISPLAY_FLOOR:
+                       904     ;               MOV DPTR, #CHAR_MAP
+                       905     ;               MOV A, FLOOR
+                       906     ;               ADD A, #30H
+                       907     ;               CLR C
+                       908     ;               SUBB A, #20h
+                       909     ;               CJNE A, #1, $+3
+                       910     ;               JC FIRST_CHAR
+                       911     ;               MOV R7, A
+                       912     ;FIND_LUT:
+                       913     ;               MOV A,DPL
+                       914     ;               ADD A, #8
+                       915     ;               MOV DPL, A
+                       916     ;               MOV A, DPH
+                       917     ;               ADDC A, #0
+                       918     ;               MOV DPH, A
+                       919     ;
+                       920     ;               DJNZ R7, FIND_LUT
+                       921     ;FIRST_CHAR:
+                       922     ;               CLR A
+                       923     ;               MOVC A, @A+DPTR         ; A now has the length of the char
+                       924     ;               MOV TEMP, A
+                       925     ;               INC TEMP                ; temp now holds length + 1
+                       926     ;               MOV A, INDEX_IN_CHAR
+                       927     ;               CJNE A, TEMP, $+3
+                       928     ;               JC STILL_INSIDE
+                       929     ;               CLR STILL_SENDING
+                       930     ;               AJMP DISPLAY_FLOOR
+                       931     ;STILL_INSIDE:
+                       932     ;               MOV A, INDEX_IN_CHAR
+                       933     ;
+                       934     ;               MOVC A, @A+DPTR ; get the proper column
+                       935     ;
+                       936     ;               MOV @R1, A      ; append last data
+                       937     ;               INC LOCATION
+                       938     ;               MOV A, LOCATION
+                       939     ;               CJNE A, #32, $+3
+                       940     ;               JC CONTINUE
+                       941     ;               MOV LOCATION, #0
+                       942     ;               CONTINUE:
+                       943     ;RET
+                       944
+                       945     ;
+                       946     ;CHAR_MAP:
+                       947     ;  DB 3, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; space
+                       948     ;  DB 2, 01011111b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; !
+                       949     ;  DB 4, 00000011b, 00000000b, 00000011b, 00000000b, 00000000b, 00000000b, 00000000b ; "
+                       950     ;  DB 6, 00010100b, 00111110b, 00010100b, 00111110b, 00010100b, 00000000b, 00000000b ; #
+                       951     ;  DB 5, 00100100b, 01101010b, 00101011b, 00010010b, 00000000b, 00000000b, 00000000b ; $
+                       952     ;  DB 6, 01100011b, 00010011b, 00001000b, 01100100b, 01100011b, 00000000b, 00000000b ; %
+                       953     ;  DB 6, 00110110b, 01001001b, 01010110b, 00100000b, 01010000b, 00000000b, 00000000b ; &
+                       954     ;  DB 2, 00000011b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; '
+                       955     ;  DB 4, 00011100b, 00100010b, 01000001b, 00000000b, 00000000b, 00000000b, 00000000b ; (
+                       956     ;  DB 4, 01000001b, 00100010b, 00011100b, 00000000b, 00000000b, 00000000b, 00000000b ; )
+                       957     ;  DB 6, 00101000b, 00011000b, 00001110b, 00011000b, 00101000b, 00000000b, 00000000b ; *
+                       958     ;  DB 6, 00001000b, 00001000b, 00111110b, 00001000b, 00001000b, 00000000b, 00000000b ; +
+                       959     ;  DB 3, 10110000b, 01110000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; ,
+                       960     ;  DB 5, 00001000b, 00001000b, 00001000b, 00001000b, 00000000b, 00000000b, 00000000b ; -
+                       961     ;  DB 3, 01100000b, 01100000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; .
+                       962     ;  DB 5, 01100000b, 00011000b, 00000110b, 00000001b, 00000000b, 00000000b, 00000000b; /
+                       963     ;  DB 5, 00111110b, 01000001b, 01000001b, 00111110b, 00000000b, 00000000b, 00000000b ; 0
+                       964     ;  DB 4, 01000010b, 01111111b, 01000000b, 00000000b, 00000000b, 00000000b, 00000000b ; 1
+                       965     ;  DB 5, 01100010b, 01010001b, 01001001b, 01000110b, 00000000b, 00000000b, 00000000b ; 2
+                       966     ;  DB 5, 00100010b, 01000001b, 01001001b, 00110110b, 00000000b, 00000000b, 00000000b ; 3
+                       967     ;  DB 5, 00011000b, 00010100b, 00010010b, 01111111b, 00000000b, 00000000b, 00000000b ; 4
+                       968     ;  DB 5, 00100111b, 01000101b, 01000101b, 00111001b, 00000000b, 00000000b, 00000000b ; 5
+                       969     ;  DB 5, 00111110b, 01001001b, 01001001b, 00110000b, 00000000b, 00000000b, 00000000b ; 6
+                       970     ;  DB 5, 01100001b, 00010001b, 00001001b, 00000111b, 00000000b, 00000000b, 00000000b ; 7
+                       971     ;  DB 5, 00110110b, 01001001b, 01001001b, 00110110b, 00000000b, 00000000b, 00000000b ; 8
+                       972     ;  DB 5, 00000110b, 01001001b, 01001001b, 00111110b, 00000000b, 00000000b, 00000000b ; 9
+                       973     ;  DB 3, 00101000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; :
+                       974     ;  DB 3, 10000000b, 01010000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; ;
+                       975     ;  DB 4, 00010000b, 00101000b, 01000100b, 00000000b, 00000000b, 00000000b, 00000000b ; <
+                       976     ;  DB 4, 00010100b, 00010100b, 00010100b, 00000000b, 00000000b, 00000000b, 00000000b ; =
+                       977     ;  DB 4, 01000100b, 00101000b, 00010000b, 00000000b, 00000000b, 00000000b, 00000000b ; >
+                       978     ;  DB 5, 00000010b, 01011001b, 00001001b, 00000110b, 00000000b, 00000000b, 00000000b ; ?
+                       979     ;  DB 6, 00111110b, 01001001b, 01010101b, 01011101b, 00001110b, 00000000b, 00000000b ; @
+                       980     ;  DB 5, 01111110b, 00010001b, 00010001b, 01111110b, 00000000b, 00000000b, 00000000b ; A
+                       981     ;  DB 5, 01111111b, 01001001b, 01001001b, 00110110b, 00000000b, 00000000b, 00000000b ; B
+                       982     ;  DB 5, 00111110b, 01000001b, 01000001b, 00100010b, 00000000b, 00000000b, 00000000b ; C
+                       983     ;  DB 5, 01111111b, 01000001b, 01000001b, 00111110b, 00000000b, 00000000b, 00000000b ; D
+                       984     ;  DB 5, 01111111b, 01001001b, 01001001b, 01000001b, 00000000b, 00000000b, 00000000b ; E
+                       985     ;  DB 5, 01111111b, 00001001b, 00001001b, 00000001b, 00000000b, 00000000b, 00000000b ; F
+                       986     ;  DB 5, 00111110b, 01000001b, 01001001b, 01111010b, 00000000b, 00000000b, 00000000b ; G
+                       987     ;  DB 5, 01111111b, 00001000b, 00001000b, 01111111b, 00000000b, 00000000b, 00000000b ; H
+                       988     ;  DB 4, 01000001b, 01111111b, 01000001b, 00000000b, 00000000b, 00000000b, 00000000b ; I
+                       989     ;  DB 5, 00110000b, 01000000b, 01000001b, 00111111b, 00000000b, 00000000b, 00000000b ; J
+                       990     ;  DB 5, 01111111b, 00001000b, 00010100b, 01100011b, 00000000b, 00000000b, 00000000b ; K
+                       991     ;  DB 5, 01111111b, 01000000b, 01000000b, 01000000b, 00000000b, 00000000b, 00000000b ; L
+                       992     ;  DB 6, 01111111b, 00000010b, 00001100b, 00000010b, 01111111b, 00000000b, 00000000b ; M
+                       993     ;  DB 6, 01111111b, 00000100b, 00001000b, 00010000b, 01111111b, 00000000b, 00000000b ; N
+                       994     ;  DB 5, 00111110b, 01000001b, 01000001b, 00111110b, 00000000b, 00000000b, 00000000b ; O
+                       995     ;  DB 5, 01111111b, 00001001b, 00001001b, 00000110b, 00000000b, 00000000b, 00000000b; P         ;50h
+                       996     ;  DB 5, 00111110b, 01000001b, 01000001b, 10111110b, 00000000b, 00000000b, 00000000b ; Q
+                       997     ;  DB 5, 01111111b, 00001001b, 00001001b, 01110110b, 00000000b, 00000000b, 00000000b ; R
+                       998     ;  DB 5, 01000110b, 01001001b, 01001001b, 00110010b, 00000000b, 00000000b, 00000000b ; S
+                       999     ;  DB 6, 00000001b, 00000001b, 01111111b, 00000001b, 00000001b, 00000000b, 00000000b ; T
+                      1000     ;  DB 5, 00111111b, 01000000b, 01000000b, 00111111b, 00000000b, 00000000b, 00000000b ; U
+                      1001     ;  DB 6, 00001111b, 00110000b, 01000000b, 00110000b, 00001111b, 00000000b, 00000000b ; V
+                      1002     ;  DB 6, 00111111b, 01000000b, 00111000b, 01000000b, 00111111b, 00000000b, 00000000b; W
+                      1003     ;  DB 6, 01100011b, 00010100b, 00001000b, 00010100b, 01100011b, 00000000b, 00000000b ; X
+                      1004     ;  DB 6, 00000111b, 00001000b, 01110000b, 00001000b, 00000111b, 00000000b, 00000000b ; Y
+                      1005     ;  DB 5, 01100001b, 01010001b, 01001001b, 01000111b, 00000000b, 00000000b, 00000000b ; Z
+                      1006     ;  DB 3, 01111111b, 01000001b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; [
+                      1007     ;  DB 5, 00000001b, 00000110b, 00011000b, 01100000b, 00000000b, 00000000b, 00000000b ; \ backslash
+                      1008     ;  DB 3, 01000001b, 01111111b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; ]
+                      1009     ;  DB 4, 00000010b, 00000001b, 00000010b, 00000000b, 00000000b, 00000000b, 00000000b; hat
+                      1010     ;  DB 5, 01000000b, 01000000b, 01000000b, 01000000b, 00000000b, 00000000b, 00000000b ; _
+                      1011     ;  DB 3, 00000001b, 00000010b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; `
+                      1012     ;  DB 5, 00100000b, 01010100b, 01010100b, 01111000b, 00000000b, 00000000b, 00000000b ; a
+                      1013     ;  DB 5, 01111111b, 01000100b, 01000100b, 00111000b, 00000000b, 00000000b, 00000000b ; b
+                      1014     ;  DB 5, 00111000b, 01000100b, 01000100b, 00101000b, 00000000b, 00000000b, 00000000b ; c
+                      1015     ;  DB 5, 00111000b, 01000100b, 01000100b, 01111111b, 00000000b, 00000000b, 00000000b ; d
+                      1016     ;  DB 5, 00111000b, 01010100b, 01010100b, 00011000b, 00000000b, 00000000b, 00000000b ; e
+                      1017     ;  DB 4, 00000100b, 01111110b, 00000101b, 00000000b, 00000000b, 00000000b, 00000000b ; f
+                      1018     ;  DB 5, 10011000b, 10100100b, 10100100b, 01111000b, 00000000b, 00000000b, 00000000b ; g
+                      1019     ;  DB 5, 01111111b, 00000100b, 00000100b, 01111000b, 00000000b, 00000000b, 00000000b ; h
+                      1020     ;  DB 4, 01000100b, 01111101b, 01000000b, 00000000b, 00000000b, 00000000b, 00000000b ; i
+                      1021     ;  DB 5, 01000000b, 10000000b, 10000100b, 01111101b, 00000000b, 00000000b, 00000000b ; j
+                      1022     ;  DB 5, 01111111b, 00010000b, 00101000b, 01000100b, 00000000b, 00000000b, 00000000b ; k
+                      1023     ;  DB 4, 01000001b, 01111111b, 01000000b, 00000000b, 00000000b, 00000000b, 00000000b ; l
+                      1024     ;  DB 6, 01111100b, 00000100b, 01111100b, 00000100b, 01111000b, 00000000b, 00000000b ; m
+                      1025     ;  DB 5, 01111100b, 00000100b, 00000100b, 01111000b, 00000000b, 00000000b, 00000000b ; n
+                      1026     ;  DB 5, 00111000b, 01000100b, 01000100b, 00111000b, 00000000b, 00000000b, 00000000b ; o
+                      1027     ;  DB 5, 11111100b, 00100100b, 00100100b, 00011000b, 00000000b, 00000000b, 00000000b ; p
+                      1028     ;  DB 5, 00011000b, 00100100b, 00100100b, 11111100b, 00000000b, 00000000b, 00000000b ; q
+                      1029     ;  DB 5, 01111100b, 00001000b, 00000100b, 00000100b, 00000000b, 00000000b, 00000000b ; r
+                      1030     ;  DB 5, 01001000b, 01010100b, 01010100b, 00100100b, 00000000b, 00000000b, 00000000b ; s
+                      1031     ;  DB 4, 00000100b, 00111111b, 01000100b, 00000000b, 00000000b, 00000000b, 00000000b ; t
+                      1032     ;  DB 5, 00111100b, 01000000b, 01000000b, 01111100b, 00000000b, 00000000b, 00000000b ; u
+                      1033     ;  DB 6, 00011100b, 00100000b, 01000000b, 00100000b, 00011100b, 00000000b, 00000000b ; v
+                      1034     ;  DB 6, 00111100b, 01000000b, 00111100b, 01000000b, 00111100b, 00000000b, 00000000b ; w
+                      1035     ;  DB 6, 01000100b, 00101000b, 00010000b, 00101000b, 01000100b, 00000000b, 00000000b ; x
+                      1036     ;  DB 5, 10011100b, 10100000b, 10100000b, 01111100b, 00000000b, 00000000b, 00000000b ; y
+                      1037     ;  DB 4, 01100100b, 01010100b, 01001100b, 00000000b, 00000000b, 00000000b, 00000000b ; z
+                      1038     ;  DB 4, 00001000b, 00110110b, 01000001b, 00000000b, 00000000b, 00000000b, 00000000b ; {
+                      1039     ;  DB 2, 01111111b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b, 00000000b ; |
+                      1040     ;  DB 4, 01000001b, 00110110b, 00001000b, 00000000b, 00000000b, 00000000b, 00000000b ; }
+                      1041     ;  DB 5, 00001000b, 00000100b, 00001000b, 00000100b, 00000000b, 00000000b, 00000000b ; ~
+                      1042
+                      1043
+                      1044
+                      1045     END
+ASSEMBLY COMPLETE, NO ERRORS FOUND, NO WARNINGS
+
+
+SYMBOL TABLE:
+??MCU_8051_IDE . . . . . . . . . . .  N  NUMB  8051H  NOT USED
+??VERSION. . . . . . . . . . . . . .  N  NUMB  014AH  NOT USED
+AC . . . . . . . . . . . . . . . . .  B  ADDR  00D6H  NOT USED
+ACC. . . . . . . . . . . . . . . . .  D  ADDR  00E0H  NOT USED
+ACK. . . . . . . . . . . . . . . . .  C  ADDR  0364H
+ACSR . . . . . . . . . . . . . . . .  D  ADDR  0097H  NOT USED
+ADCF . . . . . . . . . . . . . . . .  D  ADDR  00F6H  NOT USED
+ADCLK. . . . . . . . . . . . . . . .  D  ADDR  00F2H  NOT USED
+ADCON. . . . . . . . . . . . . . . .  D  ADDR  00F3H  NOT USED
+ADDH . . . . . . . . . . . . . . . .  D  ADDR  00F5H  NOT USED
+ADDL . . . . . . . . . . . . . . . .  D  ADDR  00F4H  NOT USED
+AUXR . . . . . . . . . . . . . . . .  D  ADDR  008EH  NOT USED
+AUXR1. . . . . . . . . . . . . . . .  D  ADDR  00A2H  NOT USED
+A_SMALLER. . . . . . . . . . . . . .  C  ADDR  02BDH
+B. . . . . . . . . . . . . . . . . .  D  ADDR  00F0H
+BACK . . . . . . . . . . . . . . . .  C  ADDR  0350H
+BACK2. . . . . . . . . . . . . . . .  C  ADDR  0378H
+BACK_1 . . . . . . . . . . . . . . .  C  ADDR  006CH
+BACK_2 . . . . . . . . . . . . . . .  C  ADDR  006AH
+BACK_3 . . . . . . . . . . . . . . .  C  ADDR  0068H
+BACK__2. . . . . . . . . . . . . . .  C  ADDR  0267H
+BACK__3. . . . . . . . . . . . . . .  C  ADDR  0265H
+BDRCON . . . . . . . . . . . . . . .  D  ADDR  009BH  NOT USED
+BDRCON_1 . . . . . . . . . . . . . .  D  ADDR  009CH  NOT USED
+BRIGHT . . . . . . . . . . . . . . .  N  NUMB  0031H  NOT USED
+BRL. . . . . . . . . . . . . . . . .  D  ADDR  009AH  NOT USED
+CALCULATE_THRESHOLDS . . . . . . . .  C  ADDR  02D3H
+CCAP0H . . . . . . . . . . . . . . .  D  ADDR  00FAH  NOT USED
+CCAP0L . . . . . . . . . . . . . . .  D  ADDR  00EAH  NOT USED
+CCAP1H . . . . . . . . . . . . . . .  D  ADDR  00FBH  NOT USED
+CCAP1L . . . . . . . . . . . . . . .  D  ADDR  00EBH  NOT USED
+CCAP2H . . . . . . . . . . . . . . .  D  ADDR  00FCH  NOT USED
+CCAP3H . . . . . . . . . . . . . . .  D  ADDR  00FDH  NOT USED
+CCAP4H . . . . . . . . . . . . . . .  D  ADDR  00FEH  NOT USED
+CCAPL2H. . . . . . . . . . . . . . .  D  ADDR  00FCH  NOT USED
+CCAPL2L. . . . . . . . . . . . . . .  D  ADDR  00ECH  NOT USED
+CCAPL3H. . . . . . . . . . . . . . .  D  ADDR  00FDH  NOT USED
+CCAPL3L. . . . . . . . . . . . . . .  D  ADDR  00EDH  NOT USED
+CCAPL4H. . . . . . . . . . . . . . .  D  ADDR  00FEH  NOT USED
+CCAPL4L. . . . . . . . . . . . . . .  D  ADDR  00EEH  NOT USED
+CCAPM0 . . . . . . . . . . . . . . .  D  ADDR  00DAH  NOT USED
+CCAPM1 . . . . . . . . . . . . . . .  D  ADDR  00DBH  NOT USED
+CCAPM2 . . . . . . . . . . . . . . .  D  ADDR  00DCH  NOT USED
+CCAPM3 . . . . . . . . . . . . . . .  D  ADDR  00DDH  NOT USED
+CCAPM4 . . . . . . . . . . . . . . .  D  ADDR  00DEH  NOT USED
+CCF0 . . . . . . . . . . . . . . . .  B  ADDR  00D8H  NOT USED
+CCF1 . . . . . . . . . . . . . . . .  B  ADDR  00D9H  NOT USED
+CCF2 . . . . . . . . . . . . . . . .  B  ADDR  00DAH  NOT USED
+CCF3 . . . . . . . . . . . . . . . .  B  ADDR  00DBH  NOT USED
+CCF4 . . . . . . . . . . . . . . . .  B  ADDR  00DCH  NOT USED
+CCON . . . . . . . . . . . . . . . .  D  ADDR  00D8H  NOT USED
+CFINT. . . . . . . . . . . . . . . .  C  ADDR  0033H  NOT USED
+CH . . . . . . . . . . . . . . . . .  D  ADDR  00F9H  NOT USED
+CHECK_FLOORS . . . . . . . . . . . .  C  ADDR  026DH
+CHECK_RUNNING. . . . . . . . . . . .  C  ADDR  02ABH  NOT USED
+CKCON. . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
+CKCON0 . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
+CKRL . . . . . . . . . . . . . . . .  D  ADDR  0097H  NOT USED
+CKSEL. . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
+CL . . . . . . . . . . . . . . . . .  D  ADDR  00E9H  NOT USED
+CLK. . . . . . . . . . . . . . . . .  B  ADDR  0093H  NOT USED
+CLKREG . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
+CMOD . . . . . . . . . . . . . . . .  D  ADDR  00D9H  NOT USED
+CONFIGURE. . . . . . . . . . . . . .  C  ADDR  0074H
+CONVERT_TO_ASCII . . . . . . . . . .  C  ADDR  023DH
+CONVERT_TO_ASCII_BCD . . . . . . . .  C  ADDR  0253H
+CPRL2. . . . . . . . . . . . . . . .  B  ADDR  00C8H  NOT USED
+CR . . . . . . . . . . . . . . . . .  B  ADDR  00DEH  NOT USED
+CS . . . . . . . . . . . . . . . . .  B  ADDR  0094H  NOT USED
+CT2. . . . . . . . . . . . . . . . .  B  ADDR  00C9H  NOT USED
+CY . . . . . . . . . . . . . . . . .  B  ADDR  00D7H  NOT USED
+DATA_IS_SENT_ONCE. . . . . . . . . .  B  ADDR  007FH
+DEBUG. . . . . . . . . . . . . . . .  B  ADDR  00A0H
+DELAY1SEC. . . . . . . . . . . . . .  C  ADDR  0066H
+DELLAY10MS . . . . . . . . . . . . .  C  ADDR  0263H
+DELTA. . . . . . . . . . . . . . . .  N  NUMB  0052H
+DIN. . . . . . . . . . . . . . . . .  B  ADDR  0095H  NOT USED
+DP0H . . . . . . . . . . . . . . . .  D  ADDR  0083H  NOT USED
+DP0L . . . . . . . . . . . . . . . .  D  ADDR  0082H  NOT USED
+DP1H . . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
+DP1L . . . . . . . . . . . . . . . .  D  ADDR  0084H  NOT USED
+DPH. . . . . . . . . . . . . . . . .  D  ADDR  0083H  NOT USED
+DPL. . . . . . . . . . . . . . . . .  D  ADDR  0082H  NOT USED
+EA . . . . . . . . . . . . . . . . .  B  ADDR  00AFH  NOT USED
+EC . . . . . . . . . . . . . . . . .  B  ADDR  00AEH  NOT USED
+EECON. . . . . . . . . . . . . . . .  D  ADDR  0096H  NOT USED
+ELAPSED10SEC . . . . . . . . . . . .  B  ADDR  007CH
+ES . . . . . . . . . . . . . . . . .  B  ADDR  00ACH  NOT USED
+ET0. . . . . . . . . . . . . . . . .  B  ADDR  00A9H  NOT USED
+ET1. . . . . . . . . . . . . . . . .  B  ADDR  00ABH  NOT USED
+ET2. . . . . . . . . . . . . . . . .  B  ADDR  00ADH  NOT USED
+EX0. . . . . . . . . . . . . . . . .  B  ADDR  00A8H  NOT USED
+EX0_ISR. . . . . . . . . . . . . . .  C  ADDR  0055H
+EX1. . . . . . . . . . . . . . . . .  B  ADDR  00AAH  NOT USED
+EX1_ISR. . . . . . . . . . . . . . .  C  ADDR  005CH
+EXEN2. . . . . . . . . . . . . . . .  B  ADDR  00CBH  NOT USED
+EXF2 . . . . . . . . . . . . . . . .  B  ADDR  00CEH  NOT USED
+EXIT_CHECK . . . . . . . . . . . . .  C  ADDR  02AAH
+EXIT_CHECK2. . . . . . . . . . . . .  C  ADDR  02C4H
+EXIT_CHECK3. . . . . . . . . . . . .  C  ADDR  02D2H
+EXTI0. . . . . . . . . . . . . . . .  C  ADDR  0003H  NOT USED
+EXTI1. . . . . . . . . . . . . . . .  C  ADDR  0013H  NOT USED
+F0 . . . . . . . . . . . . . . . . .  B  ADDR  00D5H  NOT USED
+FE . . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
+FLOOR. . . . . . . . . . . . . . . .  N  NUMB  0053H
+FOUR . . . . . . . . . . . . . . . .  C  ADDR  027AH
+I2CINIT. . . . . . . . . . . . . . .  C  ADDR  0330H
+IE . . . . . . . . . . . . . . . . .  D  ADDR  00A8H
+IE0. . . . . . . . . . . . . . . . .  B  ADDR  0089H  NOT USED
+IE1. . . . . . . . . . . . . . . . .  B  ADDR  008BH  NOT USED
+INDEX_IN_CHAR. . . . . . . . . . . .  N  NUMB  006AH  NOT USED
+INT0 . . . . . . . . . . . . . . . .  B  ADDR  00B2H  NOT USED
+INT1 . . . . . . . . . . . . . . . .  B  ADDR  00B3H  NOT USED
+IP . . . . . . . . . . . . . . . . .  D  ADDR  00B8H  NOT USED
+IPH. . . . . . . . . . . . . . . . .  D  ADDR  00B7H  NOT USED
+IPH0 . . . . . . . . . . . . . . . .  D  ADDR  00B7H  NOT USED
+IPH1 . . . . . . . . . . . . . . . .  D  ADDR  00B3H  NOT USED
+IPL0 . . . . . . . . . . . . . . . .  D  ADDR  00B8H  NOT USED
+IPL1 . . . . . . . . . . . . . . . .  D  ADDR  00B2H  NOT USED
+IT0. . . . . . . . . . . . . . . . .  B  ADDR  0088H  NOT USED
+IT1. . . . . . . . . . . . . . . . .  B  ADDR  008AH  NOT USED
+KBE. . . . . . . . . . . . . . . . .  D  ADDR  009DH  NOT USED
+KBF. . . . . . . . . . . . . . . . .  D  ADDR  009EH  NOT USED
+KBLS . . . . . . . . . . . . . . . .  D  ADDR  009CH  NOT USED
+LOCATION . . . . . . . . . . . . . .  N  NUMB  0069H  NOT USED
+MAIN . . . . . . . . . . . . . . . .  C  ADDR  0016H
+MAX. . . . . . . . . . . . . . . . .  N  NUMB  004EH
+MIN. . . . . . . . . . . . . . . . .  N  NUMB  004FH
+MOVING . . . . . . . . . . . . . . .  C  ADDR  02CEH
+NAK. . . . . . . . . . . . . . . . .  C  ADDR  036DH
+ONE. . . . . . . . . . . . . . . . .  C  ADDR  029BH
+OSCCON . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
+OV . . . . . . . . . . . . . . . . .  B  ADDR  00D2H  NOT USED
+P. . . . . . . . . . . . . . . . . .  B  ADDR  00D0H  NOT USED
+P0 . . . . . . . . . . . . . . . . .  D  ADDR  0080H  NOT USED
+P1 . . . . . . . . . . . . . . . . .  D  ADDR  0090H  NOT USED
+P1M1 . . . . . . . . . . . . . . . .  D  ADDR  00D4H  NOT USED
+P1M2 . . . . . . . . . . . . . . . .  D  ADDR  00E2H  NOT USED
+P2 . . . . . . . . . . . . . . . . .  D  ADDR  00A0H
+P3 . . . . . . . . . . . . . . . . .  D  ADDR  00B0H  NOT USED
+P3M1 . . . . . . . . . . . . . . . .  D  ADDR  00D5H  NOT USED
+P3M2 . . . . . . . . . . . . . . . .  D  ADDR  00E3H  NOT USED
+P4 . . . . . . . . . . . . . . . . .  D  ADDR  00C0H  NOT USED
+P4M1 . . . . . . . . . . . . . . . .  D  ADDR  00D6H  NOT USED
+P4M2 . . . . . . . . . . . . . . . .  D  ADDR  00E4H  NOT USED
+P5 . . . . . . . . . . . . . . . . .  D  ADDR  00E8H  NOT USED
+PC . . . . . . . . . . . . . . . . .  B  ADDR  00BEH  NOT USED
+PCON . . . . . . . . . . . . . . . .  D  ADDR  0087H  NOT USED
+PPCL . . . . . . . . . . . . . . . .  B  ADDR  00BEH  NOT USED
+PREV_SAMPLE. . . . . . . . . . . . .  N  NUMB  0051H
+PS . . . . . . . . . . . . . . . . .  B  ADDR  00BCH  NOT USED
+PSL. . . . . . . . . . . . . . . . .  B  ADDR  00BCH  NOT USED
+PSW. . . . . . . . . . . . . . . . .  D  ADDR  00D0H  NOT USED
+PT0. . . . . . . . . . . . . . . . .  B  ADDR  00B9H  NOT USED
+PT0L . . . . . . . . . . . . . . . .  B  ADDR  00B9H  NOT USED
+PT1. . . . . . . . . . . . . . . . .  B  ADDR  00BBH  NOT USED
+PT1L . . . . . . . . . . . . . . . .  B  ADDR  00BBH  NOT USED
+PT2. . . . . . . . . . . . . . . . .  B  ADDR  00BDH  NOT USED
+PT2L . . . . . . . . . . . . . . . .  B  ADDR  00BDH  NOT USED
+PX0. . . . . . . . . . . . . . . . .  B  ADDR  00B8H  NOT USED
+PX0L . . . . . . . . . . . . . . . .  B  ADDR  00B8H  NOT USED
+PX1. . . . . . . . . . . . . . . . .  B  ADDR  00BAH  NOT USED
+PX1L . . . . . . . . . . . . . . . .  B  ADDR  00BAH  NOT USED
+P_1. . . . . . . . . . . . . . . . .  N  NUMB  0060H
+P_2. . . . . . . . . . . . . . . . .  N  NUMB  0061H
+P_3. . . . . . . . . . . . . . . . .  N  NUMB  0062H
+RB8. . . . . . . . . . . . . . . . .  B  ADDR  009AH  NOT USED
+RCAP2H . . . . . . . . . . . . . . .  D  ADDR  00CBH  NOT USED
+RCAP2L . . . . . . . . . . . . . . .  D  ADDR  00CAH  NOT USED
+RCLK . . . . . . . . . . . . . . . .  B  ADDR  00CDH  NOT USED
+RD . . . . . . . . . . . . . . . . .  B  ADDR  00B7H  NOT USED
+READ_AGAIN . . . . . . . . . . . . .  C  ADDR  0040H
+READ_PRESSURE. . . . . . . . . . . .  C  ADDR  008DH
+READ_RTC . . . . . . . . . . . . . .  C  ADDR  00DEH
+RECV . . . . . . . . . . . . . . . .  C  ADDR  0376H
+REN. . . . . . . . . . . . . . . . .  B  ADDR  009CH  NOT USED
+RESET. . . . . . . . . . . . . . . .  C  ADDR  0000H  NOT USED
+RESTART_PROGRAM. . . . . . . . . . .  C  ADDR  003EH
+RI . . . . . . . . . . . . . . . . .  B  ADDR  0098H  NOT USED
+RS0. . . . . . . . . . . . . . . . .  B  ADDR  00D3H  NOT USED
+RS1. . . . . . . . . . . . . . . . .  B  ADDR  00D4H  NOT USED
+RSTART . . . . . . . . . . . . . . .  C  ADDR  0335H  NOT USED
+RTC_DATE . . . . . . . . . . . . . .  N  NUMB  0066H
+RTC_HOUR . . . . . . . . . . . . . .  N  NUMB  0065H
+RTC_MIN. . . . . . . . . . . . . . .  N  NUMB  0064H
+RTC_MON. . . . . . . . . . . . . . .  N  NUMB  0067H
+RTC_SEC. . . . . . . . . . . . . . .  N  NUMB  0063H
+RTC_YEAR . . . . . . . . . . . . . .  N  NUMB  0068H
+RUNNING. . . . . . . . . . . . . . .  B  ADDR  007DH
+RXD. . . . . . . . . . . . . . . . .  B  ADDR  00B0H  NOT USED
+SADDR. . . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
+SADDR_0. . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
+SADDR_1. . . . . . . . . . . . . . .  D  ADDR  00AAH  NOT USED
+SADEN. . . . . . . . . . . . . . . .  D  ADDR  00B9H  NOT USED
+SADEN_0. . . . . . . . . . . . . . .  D  ADDR  00B9H  NOT USED
+SADEN_1. . . . . . . . . . . . . . .  D  ADDR  00BAH  NOT USED
+SAMPLE . . . . . . . . . . . . . . .  N  NUMB  0050H
+SBUF . . . . . . . . . . . . . . . .  D  ADDR  0099H
+SCL. . . . . . . . . . . . . . . . .  N  NUMB  0081H
+SCON . . . . . . . . . . . . . . . .  D  ADDR  0098H
+SDA. . . . . . . . . . . . . . . . .  N  NUMB  0080H
+SEND . . . . . . . . . . . . . . . .  C  ADDR  034EH
+SEND2DOTS. . . . . . . . . . . . . .  C  ADDR  021FH
+SENDMINUS. . . . . . . . . . . . . .  C  ADDR  0233H
+SENDSPACE. . . . . . . . . . . . . .  C  ADDR  0229H
+SEND_DATA. . . . . . . . . . . . . .  C  ADDR  01AFH
+SEND_SERIALLY. . . . . . . . . . . .  C  ADDR  01F5H
+SEND_SERIALLY_BCD. . . . . . . . . .  C  ADDR  020EH
+SEVEN_SEGMENTS . . . . . . . . . . .  C  ADDR  0390H
+SHOW_FLOOR . . . . . . . . . . . . .  C  ADDR  0386H
+SINT . . . . . . . . . . . . . . . .  C  ADDR  0023H  NOT USED
+SKIP_SEND. . . . . . . . . . . . . .  C  ADDR  0053H  NOT USED
+SKIP_VALUE . . . . . . . . . . . . .  C  ADDR  00DDH
+SM0. . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
+SM1. . . . . . . . . . . . . . . . .  B  ADDR  009EH  NOT USED
+SM2. . . . . . . . . . . . . . . . .  B  ADDR  009DH  NOT USED
+SP . . . . . . . . . . . . . . . . .  D  ADDR  0081H  NOT USED
+SPCON. . . . . . . . . . . . . . . .  D  ADDR  00C3H  NOT USED
+SPCR . . . . . . . . . . . . . . . .  D  ADDR  00D5H  NOT USED
+SPDAT. . . . . . . . . . . . . . . .  D  ADDR  00C5H  NOT USED
+SPDR . . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
+SPEED. . . . . . . . . . . . . . . .  N  NUMB  0030H  NOT USED
+SPSR . . . . . . . . . . . . . . . .  D  ADDR  00AAH  NOT USED
+SPSTA. . . . . . . . . . . . . . . .  D  ADDR  00C4H  NOT USED
+STARTC . . . . . . . . . . . . . . .  C  ADDR  033EH
+STILL_SENDING. . . . . . . . . . . .  B  ADDR  007EH  NOT USED
+STOP . . . . . . . . . . . . . . . .  C  ADDR  0345H
+T0 . . . . . . . . . . . . . . . . .  B  ADDR  00B4H  NOT USED
+T1 . . . . . . . . . . . . . . . . .  B  ADDR  00B5H  NOT USED
+T2CON. . . . . . . . . . . . . . . .  D  ADDR  00C8H  NOT USED
+T2MOD. . . . . . . . . . . . . . . .  D  ADDR  00C9H  NOT USED
+TB8. . . . . . . . . . . . . . . . .  B  ADDR  009BH  NOT USED
+TCLK . . . . . . . . . . . . . . . .  B  ADDR  00CCH  NOT USED
+TCON . . . . . . . . . . . . . . . .  D  ADDR  0088H
+TEMP . . . . . . . . . . . . . . . .  N  NUMB  005AH
+TF0. . . . . . . . . . . . . . . . .  B  ADDR  008DH
+TF1. . . . . . . . . . . . . . . . .  B  ADDR  008FH  NOT USED
+TF2. . . . . . . . . . . . . . . . .  B  ADDR  00CFH  NOT USED
+TH0. . . . . . . . . . . . . . . . .  D  ADDR  008CH  NOT USED
+TH1. . . . . . . . . . . . . . . . .  D  ADDR  008DH
+TH2. . . . . . . . . . . . . . . . .  D  ADDR  00CDH  NOT USED
+THREE. . . . . . . . . . . . . . . .  C  ADDR  0285H
+THRESHOLD_1. . . . . . . . . . . . .  N  NUMB  0058H
+THRESHOLD_2. . . . . . . . . . . . .  N  NUMB  0057H
+THRESHOLD_3. . . . . . . . . . . . .  N  NUMB  0056H
+THRESHOLD_4. . . . . . . . . . . . .  N  NUMB  0055H
+THRESHOLD_5. . . . . . . . . . . . .  N  NUMB  0054H
+TI . . . . . . . . . . . . . . . . .  B  ADDR  0099H
+TIMER0 . . . . . . . . . . . . . . .  C  ADDR  000BH  NOT USED
+TIMER1 . . . . . . . . . . . . . . .  C  ADDR  001BH  NOT USED
+TIMER2 . . . . . . . . . . . . . . .  C  ADDR  002BH  NOT USED
+TL0. . . . . . . . . . . . . . . . .  D  ADDR  008AH  NOT USED
+TL1. . . . . . . . . . . . . . . . .  D  ADDR  008BH  NOT USED
+TL2. . . . . . . . . . . . . . . . .  D  ADDR  00CCH  NOT USED
+TMOD . . . . . . . . . . . . . . . .  D  ADDR  0089H
+TR0. . . . . . . . . . . . . . . . .  B  ADDR  008CH  NOT USED
+TR1. . . . . . . . . . . . . . . . .  B  ADDR  008EH
+TR2. . . . . . . . . . . . . . . . .  B  ADDR  00CAH  NOT USED
+TWO. . . . . . . . . . . . . . . . .  C  ADDR  0290H
+TXD. . . . . . . . . . . . . . . . .  B  ADDR  00B1H  NOT USED
+WADDR. . . . . . . . . . . . . . . .  N  NUMB  0032H  NOT USED
+WDATA. . . . . . . . . . . . . . . .  N  NUMB  0033H  NOT USED
+WDTCON . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
+WDTPRG . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
+WDTRST . . . . . . . . . . . . . . .  D  ADDR  00A6H  NOT USED
+WR . . . . . . . . . . . . . . . . .  B  ADDR  00B6H  NOT USED
+ZERO . . . . . . . . . . . . . . . .  C  ADDR  02A6H
